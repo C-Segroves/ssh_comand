@@ -14,7 +14,7 @@
         h1, h2 { color: #333; }
         input, button {
             padding: 10px;
-            margin: 6px 0;
+            margin: 6px 4px 6px 0;
             font-size: 16px;
         }
         button {
@@ -22,57 +22,150 @@
             color: white;
             border: none;
             cursor: pointer;
+            border-radius: 4px;
         }
         button:hover { background: #45a049; }
-        #hosts-list, #results {
-            margin-top: 20px;
+
+        /* Tabs */
+        .tab {
+            overflow: hidden;
+            border: 1px solid #ccc;
+            background-color: #f1f1f1;
+            margin-bottom: 16px;
+            border-radius: 4px 4px 0 0;
         }
-        .host-box {
+        .tab button {
+            background-color: inherit;
+            float: left;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 14px 18px;
+            transition: 0.3s;
+            font-size: 17px;
+        }
+        .tab button:hover { background-color: #ddd; }
+        .tab button.active { background-color: #ccc; }
+
+        .tabcontent {
+            display: none;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-top: none;
             background: white;
+            border-radius: 0 0 4px 4px;
+        }
+
+        .host-box {
+            background: #f9f9f9;
             border: 1px solid #ddd;
             border-radius: 6px;
-            padding: 12px;
-            margin: 12px;
-            width: 340px;
-            display: inline-block;
-            vertical-align: top;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            padding: 14px;
+            margin: 12px 0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.08);
         }
         pre {
             white-space: pre-wrap;
-            max-height: 240px;
+            max-height: 320px;
             overflow-y: auto;
             background: #f8f8f8;
-            padding: 10px;
+            padding: 12px;
             border-radius: 4px;
+            margin: 10px 0 0;
+            font-family: 'Courier New', Courier, monospace;
         }
-        .error { color: #c00; }
+        .error { color: #c00; font-weight: bold; }
+
+        #all-results, .single-result {
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
 
 <h1>LAN Command Runner</h1>
 
-<h2>Register a Host</h2>
-<input id="name"     placeholder="Friendly name (e.g. livingroom-pc)" />
-<input id="ip"       placeholder="IP address (e.g. 192.168.1.45)" />
-<input id="username" placeholder="SSH username" value="youruser" />
-<input id="password" type="password" placeholder="Password (only if key not set up yet)" />
-<button onclick="registerHost()">Register</button>
+<div class="tab" id="tabs"></div>
 
-<h2>Run Command on All Hosts</h2>
-<input id="command" placeholder="Command to run (e.g. uptime, df -h, whoami)" style="width: 500px;" />
-<button onclick="runCommand()">Execute on All</button>
+<!-- All Hosts Tab Content -->
+<div id="all" class="tabcontent">
+    <h2>All Hosts – Register & Bulk Commands</h2>
 
-<h2>Registered Hosts</h2>
-<div id="hosts-list"></div>
+    <h3>Register New Host</h3>
+    <input id="name"     placeholder="Friendly name (e.g. bedroom-pc)" />
+    <input id="ip"       placeholder="IP address (e.g. 192.168.1.45)" />
+    <input id="username" placeholder="SSH username" value="chris" />
+    <input id="password" type="password" placeholder="Password (only if key not set up yet)" />
+    <button onclick="registerHost()">Register</button>
 
-<h2>Command Results</h2>
-<div id="results"></div>
+    <h3>Run Command on ALL Hosts</h3>
+    <input id="all-command" placeholder="Command (e.g. uptime, df -h, free -h)" style="width: 600px;" />
+    <button onclick="runOnAll()">Execute on All</button>
+
+    <div id="all-results"></div>
+</div>
 
 <script>
+// Tab switching
+function openTab(evt, tabName) {
+    var i, tabcontent, tablinks;
+    tabcontent = document.getElementsByClassName("tabcontent");
+    for (i = 0; i < tabcontent.length; i++) {
+        tabcontent[i].style.display = "none";
+    }
+    tablinks = document.getElementsByClassName("tablinks");
+    for (i = 0; i < tablinks.length; i++) {
+        tablinks[i].className = tablinks[i].className.replace(" active", "");
+    }
+    document.getElementById(tabName).style.display = "block";
+    if (evt) evt.currentTarget.className += " active";
+}
+
+// Refresh hosts and tabs
 const socket = io();
 
+function refreshHostsAndTabs() {
+    fetch('/hosts')
+        .then(r => r.json())
+        .then(hosts => {
+            const tabBar = document.getElementById('tabs');
+            tabBar.innerHTML = '';
+
+            // All tab
+            const allBtn = document.createElement('button');
+            allBtn.className = 'tablinks active';
+            allBtn.textContent = 'All Hosts';
+            allBtn.onclick = (e) => openTab(e, 'all');
+            tabBar.appendChild(allBtn);
+
+            // Per-host tabs
+            hosts.forEach(host => {
+                const btn = document.createElement('button');
+                btn.className = 'tablinks';
+                btn.textContent = host;
+                btn.onclick = (e) => openTab(e, `tab-${host}`);
+                tabBar.appendChild(btn);
+
+                // Create content div if missing
+                if (!document.getElementById(`tab-${host}`)) {
+                    const div = document.createElement('div');
+                    div.id = `tab-${host}`;
+                    div.className = 'tabcontent';
+                    div.innerHTML = `
+                        <h2>Host: ${host}</h2>
+                        <input id="cmd-${host}" placeholder="Command for ${host} only" style="width: 600px;" />
+                        <button onclick="runOnSingle('${host}')">Run on this host</button>
+                        <div id="result-${host}" class="single-result"></div>
+                    `;
+                    document.body.appendChild(div);
+                }
+            });
+
+            openTab(null, 'all');
+        });
+}
+
+// Register
 function registerHost() {
     const name     = document.getElementById('name').value.trim();
     const ip       = document.getElementById('ip').value.trim();
@@ -80,7 +173,7 @@ function registerHost() {
     const password = document.getElementById('password').value;
 
     if (!name || !ip || !username) {
-        alert("Please fill in name, IP, and username");
+        alert("Please fill name, IP and username");
         return;
     }
 
@@ -94,51 +187,58 @@ function registerHost() {
         if (data.error) alert("Error: " + data.error);
         else {
             alert(data.message);
-            loadHosts();
-            document.getElementById('password').value = ''; // clear password field
+            document.getElementById('password').value = '';
+            refreshHostsAndTabs();
         }
     })
     .catch(err => alert("Request failed: " + err));
 }
 
-function loadHosts() {
-    fetch('/hosts')
-        .then(r => r.json())
-        .then(hosts => {
-            const div = document.getElementById('hosts-list');
-            div.innerHTML = hosts.length ? hosts.map(h => `<div>${h}</div>`).join('') : '(no hosts registered yet)';
-        });
+// Run on all
+function runOnAll() {
+    const cmd = document.getElementById('all-command').value.trim();
+    if (!cmd) return alert("Enter a command");
+    socket.emit('execute_command', { command: cmd, target: 'all' });
 }
 
-function runCommand() {
-    const cmd = document.getElementById('command').value.trim();
-    if (!cmd) {
-        alert("Please enter a command");
-        return;
-    }
-    socket.emit('execute_command', { command: cmd });
+// Run on single
+function runOnSingle(host) {
+    const cmd = document.getElementById(`cmd-${host}`).value.trim();
+    if (!cmd) return alert("Enter a command for " + host);
+    socket.emit('execute_command', { command: cmd, target: host });
 }
 
+// Receive results
 socket.on('command_results', (results) => {
-    const container = document.getElementById('results');
-    container.innerHTML = '';
-
-    Object.entries(results).forEach(([name, data]) => {
-        const box = document.createElement('div');
-        box.className = 'host-box';
-        let content = `<strong>${name} (${data.ip})</strong><br><pre>`;
-
-        if (data.output) content += data.output + '\n';
-        if (data.error)  content += `<span class="error">Error: ${data.error}</span>\n`;
-
-        content += '</pre>';
-        box.innerHTML = content;
-        container.appendChild(box);
-    });
+    if (results._meta && results._meta.target === 'all') {
+        const container = document.getElementById('all-results');
+        container.innerHTML = '';
+        Object.entries(results).forEach(([name, data]) => {
+            if (name === '_meta') return;
+            const box = document.createElement('div');
+            box.className = 'host-box';
+            box.innerHTML = `<strong>${name} (${data.ip})</strong><pre>${data.output || ''}${data.error ? '\n<span class="error">Error: ' + data.error + '</span>' : ''}</pre>`;
+            container.appendChild(box);
+        });
+    } else {
+        Object.entries(results).forEach(([name, data]) => {
+            const container = document.getElementById(`result-${name}`);
+            if (container) {
+                container.innerHTML = '';
+                const box = document.createElement('div');
+                box.className = 'host-box';
+                box.innerHTML = `<strong>Result for ${name} (${data.ip})</strong><pre>${data.output || ''}${data.error ? '\n<span class="error">Error: ' + data.error + '</span>' : ''}</pre>`;
+                container.appendChild(box);
+            }
+        });
+    }
 });
 
-// Load hosts on page load
-window.onload = loadHosts;
+// Init
+window.onload = () => {
+    refreshHostsAndTabs();
+    openTab(null, 'all');
+};
 </script>
 
 </body>

@@ -1,4 +1,4 @@
-# app.py  (updated - non-interactive version)
+# app.py
 from flask import Flask, request, render_template, jsonify
 from flask_socketio import SocketIO, emit
 import paramiko
@@ -10,13 +10,12 @@ app = Flask(__name__)
 socketio = SocketIO(app)
 
 # In-memory storage for registered hosts
-hosts = {}
+hosts = {}  # name → {'ip': str, 'username': str, 'client': SSHClient}
 
-# ────────────────────────────────────────────────
-# SSH key loading — now non-interactive
-# ────────────────────────────────────────────────
+# Load SSH private key once at startup (non-interactive via env vars or mounted file)
+print("\n=== LAN Command Server - SSH Key Setup ===")
 PRIVATE_KEY = None
-KEY_PASSPHRASE = os.getenv("SSH_KEY_PASSPHRASE")   # optional env var
+KEY_PASSPHRASE = os.getenv("SSH_KEY_PASSPHRASE")
 
 key_path = os.getenv("SSH_PRIVATE_KEY_PATH", "/root/.ssh/id_rsa")
 
@@ -29,12 +28,10 @@ if os.path.isfile(key_path):
         print(f"Loaded SSH private key from {key_path}")
     except paramiko.PasswordRequiredException:
         print("Error: Private key requires passphrase, but SSH_KEY_PASSPHRASE env var is empty or missing.")
-        PRIVATE_KEY = None
     except Exception as e:
         print(f"Failed to load private key: {e}")
-        PRIVATE_KEY = None
 else:
-    print(f"No private key found at {key_path} — will require password on registration")
+    print(f"No private key found at {key_path} — password fallback will be required during registration")
 
 @app.route('/')
 def index():
@@ -71,7 +68,7 @@ def register():
         elif password:
             connect_args['password'] = password
         else:
-            return jsonify({'error': 'No auth method: load key or provide password'}), 400
+            return jsonify({'error': 'No authentication method available (provide password or load SSH key)'}), 400
 
         client.connect(**connect_args)
         hosts[name] = {
@@ -79,7 +76,7 @@ def register():
             'username': username,
             'client': client,
         }
-        return jsonify({'message': f"Registered '{name}' using {auth_used} auth"})
+        return jsonify({'message': f"Successfully registered '{name}' using {auth_used} authentication"})
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
@@ -90,6 +87,8 @@ def get_hosts():
 @socketio.on('execute_command')
 def execute_command(data):
     command = data.get('command')
+    target = data.get('target', 'all')  # 'all' or specific hostname
+
     if not command:
         emit('command_results', {'error': 'No command provided'})
         return
@@ -112,14 +111,20 @@ def execute_command(data):
                 'error': str(e)
             }
 
-    threads = []
-    for hostname, host_data in hosts.items():
-        t = threading.Thread(target=run_on_host, args=(hostname, host_data))
-        t.start()
-        threads.append(t)
-
-    for t in threads:
-        t.join()
+    if target == 'all':
+        threads = []
+        for hostname, host_data in hosts.items():
+            t = threading.Thread(target=run_on_host, args=(hostname, host_data))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
+        results['_meta'] = {'target': 'all'}
+    else:
+        if target in hosts:
+            run_on_host(target, hosts[target])
+        else:
+            results[target] = {'error': 'Host not found'}
 
     emit('command_results', results, broadcast=True)
 
