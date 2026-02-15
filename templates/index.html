@@ -26,11 +26,11 @@
         }
         button:hover { background: #45a049; }
 
-        /* Tabs */
+        /* Tabs – improved contrast */
         .tab {
             overflow: hidden;
             border: 1px solid #ccc;
-            background-color: #f1f1f1;
+            background-color: #e8e8e8;          /* slightly darker than before */
             margin-bottom: 16px;
             border-radius: 4px 4px 0 0;
         }
@@ -43,9 +43,14 @@
             padding: 14px 18px;
             transition: 0.3s;
             font-size: 17px;
+            color: #000000;                     /* black text – main fix */
+            font-weight: 500;
         }
         .tab button:hover { background-color: #ddd; }
-        .tab button.active { background-color: #ccc; }
+        .tab button.active {
+            background-color: #d0d0d0;
+            border-bottom: 3px solid #4CAF50;
+        }
 
         .tabcontent {
             display: none;
@@ -79,6 +84,22 @@
         #all-results, .single-result {
             margin-top: 20px;
         }
+
+        /* Host selector */
+        #host-selector {
+            margin: 16px 0;
+            padding: 12px;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+        }
+        .host-item {
+            margin: 8px 0;
+        }
+        .host-item label {
+            cursor: pointer;
+            font-size: 16px;
+        }
     </style>
 </head>
 <body>
@@ -89,7 +110,7 @@
 
 <!-- All Hosts Tab Content -->
 <div id="all" class="tabcontent">
-    <h2>All Hosts – Register & Bulk Commands</h2>
+    <h2>All Hosts – Register & Selective Commands</h2>
 
     <h3>Register New Host</h3>
     <input id="name"     placeholder="Friendly name (e.g. bedroom-pc)" />
@@ -98,9 +119,13 @@
     <input id="password" type="password" placeholder="Password (only if key not set up yet)" />
     <button onclick="registerHost()">Register</button>
 
-    <h3>Run Command on ALL Hosts</h3>
-    <input id="all-command" placeholder="Command (e.g. uptime, df -h, free -h)" style="width: 600px;" />
-    <button onclick="runOnAll()">Execute on All</button>
+    <h3>Run Command on Selected Hosts</h3>
+    <div id="host-selector">
+        <!-- Checkboxes will be populated here -->
+    </div>
+
+    <input id="all-command" placeholder="Command (e.g. uptime, df -h, free -h)" style="width: 600px; margin-top: 12px;" />
+    <button onclick="runOnSelected()">Execute on Selected</button>
 
     <div id="all-results"></div>
 </div>
@@ -121,24 +146,27 @@ function openTab(evt, tabName) {
     if (evt) evt.currentTarget.className += " active";
 }
 
-// Refresh hosts and tabs
+// Refresh hosts + tabs + checkboxes
 const socket = io();
+
+let currentHosts = [];
 
 function refreshHostsAndTabs() {
     fetch('/hosts')
         .then(r => r.json())
         .then(hosts => {
+            currentHosts = hosts;
+
+            // Tabs
             const tabBar = document.getElementById('tabs');
             tabBar.innerHTML = '';
 
-            // All tab
             const allBtn = document.createElement('button');
             allBtn.className = 'tablinks active';
             allBtn.textContent = 'All Hosts';
             allBtn.onclick = (e) => openTab(e, 'all');
             tabBar.appendChild(allBtn);
 
-            // Per-host tabs
             hosts.forEach(host => {
                 const btn = document.createElement('button');
                 btn.className = 'tablinks';
@@ -146,7 +174,6 @@ function refreshHostsAndTabs() {
                 btn.onclick = (e) => openTab(e, `tab-${host}`);
                 tabBar.appendChild(btn);
 
-                // Create content div if missing
                 if (!document.getElementById(`tab-${host}`)) {
                     const div = document.createElement('div');
                     div.id = `tab-${host}`;
@@ -160,6 +187,23 @@ function refreshHostsAndTabs() {
                     document.body.appendChild(div);
                 }
             });
+
+            // Host selector checkboxes
+            const selector = document.getElementById('host-selector');
+            selector.innerHTML = '';
+            if (hosts.length === 0) {
+                selector.innerHTML = '<p style="color:#666;">No hosts registered yet.</p>';
+            } else {
+                hosts.forEach(host => {
+                    const div = document.createElement('div');
+                    div.className = 'host-item';
+                    div.innerHTML = `
+                        <input type="checkbox" id="chk-${host}" value="${host}" checked>
+                        <label for="chk-${host}">${host}</label>
+                    `;
+                    selector.appendChild(div);
+                });
+            }
 
             openTab(null, 'all');
         });
@@ -194,14 +238,25 @@ function registerHost() {
     .catch(err => alert("Request failed: " + err));
 }
 
-// Run on all
-function runOnAll() {
+// Run on selected hosts
+function runOnSelected() {
     const cmd = document.getElementById('all-command').value.trim();
     if (!cmd) return alert("Enter a command");
-    socket.emit('execute_command', { command: cmd, target: 'all' });
+
+    const selected = currentHosts.filter(host => 
+        document.getElementById(`chk-${host}`).checked
+    );
+
+    if (selected.length === 0) return alert("Select at least one host");
+
+    socket.emit('execute_command', { 
+        command: cmd, 
+        target: 'selected', 
+        hosts: selected 
+    });
 }
 
-// Run on single
+// Run on single host
 function runOnSingle(host) {
     const cmd = document.getElementById(`cmd-${host}`).value.trim();
     if (!cmd) return alert("Enter a command for " + host);
@@ -210,7 +265,7 @@ function runOnSingle(host) {
 
 // Receive results
 socket.on('command_results', (results) => {
-    if (results._meta && results._meta.target === 'all') {
+    if (results._meta && results._meta.target === 'selected') {
         const container = document.getElementById('all-results');
         container.innerHTML = '';
         Object.entries(results).forEach(([name, data]) => {
@@ -220,7 +275,10 @@ socket.on('command_results', (results) => {
             box.innerHTML = `<strong>${name} (${data.ip})</strong><pre>${data.output || ''}${data.error ? '\n<span class="error">Error: ' + data.error + '</span>' : ''}</pre>`;
             container.appendChild(box);
         });
+    } else if (results._meta && results._meta.target === 'single') {
+        // handled in else below
     } else {
+        // single host result
         Object.entries(results).forEach(([name, data]) => {
             const container = document.getElementById(`result-${name}`);
             if (container) {
