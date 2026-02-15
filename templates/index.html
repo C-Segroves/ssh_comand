@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>LAN Command Runner</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+        h1, h2 { color: #333; }
+        input, button {
+            padding: 10px;
+            margin: 6px 0;
+            font-size: 16px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover { background: #45a049; }
+        #hosts-list, #results {
+            margin-top: 20px;
+        }
+        .host-box {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 12px;
+            margin: 12px;
+            width: 340px;
+            display: inline-block;
+            vertical-align: top;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        pre {
+            white-space: pre-wrap;
+            max-height: 240px;
+            overflow-y: auto;
+            background: #f8f8f8;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .error { color: #c00; }
+    </style>
+</head>
+<body>
+
+<h1>LAN Command Runner</h1>
+
+<h2>Register a Host</h2>
+<input id="name"     placeholder="Friendly name (e.g. livingroom-pc)" />
+<input id="ip"       placeholder="IP address (e.g. 192.168.1.45)" />
+<input id="username" placeholder="SSH username" value="youruser" />
+<input id="password" type="password" placeholder="Password (only if key not set up yet)" />
+<button onclick="registerHost()">Register</button>
+
+<h2>Run Command on All Hosts</h2>
+<input id="command" placeholder="Command to run (e.g. uptime, df -h, whoami)" style="width: 500px;" />
+<button onclick="runCommand()">Execute on All</button>
+
+<h2>Registered Hosts</h2>
+<div id="hosts-list"></div>
+
+<h2>Command Results</h2>
+<div id="results"></div>
+
+<script>
+const socket = io();
+
+function registerHost() {
+    const name     = document.getElementById('name').value.trim();
+    const ip       = document.getElementById('ip').value.trim();
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+
+    if (!name || !ip || !username) {
+        alert("Please fill in name, IP, and username");
+        return;
+    }
+
+    fetch('/register', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name, ip, username, password })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) alert("Error: " + data.error);
+        else {
+            alert(data.message);
+            loadHosts();
+            document.getElementById('password').value = ''; // clear password field
+        }
+    })
+    .catch(err => alert("Request failed: " + err));
+}
+
+function loadHosts() {
+    fetch('/hosts')
+        .then(r => r.json())
+        .then(hosts => {
+            const div = document.getElementById('hosts-list');
+            div.innerHTML = hosts.length ? hosts.map(h => `<div>${h}</div>`).join('') : '(no hosts registered yet)';
+        });
+}
+
+function runCommand() {
+    const cmd = document.getElementById('command').value.trim();
+    if (!cmd) {
+        alert("Please enter a command");
+        return;
+    }
+    socket.emit('execute_command', { command: cmd });
+}
+
+socket.on('command_results', (results) => {
+    const container = document.getElementById('results');
+    container.innerHTML = '';
+
+    Object.entries(results).forEach(([name, data]) => {
+        const box = document.createElement('div');
+        box.className = 'host-box';
+        let content = `<strong>${name} (${data.ip})</strong><br><pre>`;
+
+        if (data.output) content += data.output + '\n';
+        if (data.error)  content += `<span class="error">Error: ${data.error}</span>\n`;
+
+        content += '</pre>';
+        box.innerHTML = content;
+        container.appendChild(box);
+    });
+});
+
+// Load hosts on page load
+window.onload = loadHosts;
+</script>
+
+</body>
+</html>
